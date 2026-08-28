@@ -1,0 +1,20 @@
+{
+  "name": "com.cupkekgames.assetvaults",
+  "displayName": "CupkekGames Asset Vaults",
+  "version": "0.1.0",
+  "author": {
+    "name": "CupkekGames",
+    "url": "https://www.docs.cupkek.games"
+  },
+  "unity": "6000.5",
+  "documentationUrl": "https://docs.cupkek.games/",
+  "description": "Keeps large reference and source material out of git. Packs live in a Vault folder beside Assets that Unity never imports, are archived per pack and backed up to cloud storage, and are restored with their .meta GUIDs intact. Storage-agnostic: backends register themselves, so this package installs alone.",
+  "keywords": [
+    "Asset Vault",
+    "Large Files",
+    "Git",
+    "Editor",
+    "CupkekGames"
+  ],
+  "dependencies": {}
+}

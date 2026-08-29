@@ -391,7 +391,7 @@ namespace CupkekGames.AssetVaults.Editor
     /// Three right-aligned numbers with no labels are a puzzle. One 14px strip
     /// solves it for the whole list.
     /// </summary>
-    private static void DrawColumnHeader()
+    private void DrawColumnHeader()
     {
       Rect row = EditorGUILayout.GetControlRect(false, 14f);
       float right = row.x + row.width;
@@ -667,11 +667,13 @@ namespace CupkekGames.AssetVaults.Editor
       return open && DrawPackDetail(view, connected);
     }
 
-    // Built once. EditorStyles is not available at field-initialiser time, so
-    // it cannot simply be a static readonly.
-    private static GUIStyle _rightMini;
+    // Per window, not static: a static cache would owe the lifecycle analyzer
+    // an AutoStaticsCleanup answer, and the window is exactly the lifetime this
+    // style should have anyway. Not a field initialiser because EditorStyles is
+    // not ready when the window is constructed.
+    [NonSerialized] private GUIStyle _rightMini;
 
-    private static GUIStyle RightMini()
+    private GUIStyle RightMini()
     {
       return _rightMini ??= new GUIStyle(EditorStyles.miniLabel)
       {

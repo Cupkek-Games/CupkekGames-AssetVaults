@@ -52,6 +52,18 @@ namespace CupkekGames.AssetVaults.Editor
           + "leave with it.");
       }
 
+      // Nor anywhere else in the vault: the point of harvesting is to put files
+      // somewhere git will keep them, and the vault is the one place it will not.
+      string vaultRoot = VaultManifest.ResolveVaultRoot(projectRoot)
+        + Path.DirectorySeparatorChar;
+      if ((destFull + Path.DirectorySeparatorChar).StartsWith(vaultRoot,
+            StringComparison.OrdinalIgnoreCase))
+      {
+        throw new VaultException(
+          $"The destination is inside {VaultManifest.VaultRoot}/, which is exactly what "
+          + "git does not carry. Harvested files need a home outside the vault.");
+      }
+
       var written = new List<string>(files.Count);
       foreach (string relative in files)
       {

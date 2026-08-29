@@ -60,7 +60,9 @@ namespace CupkekGames.AssetVaults.Editor
   ///
   /// <para>Committed on purpose, beside <c>vault.json</c>. It is a finding about
   /// the project, like the manifest, not a per-user cache: <c>Library/</c> would
-  /// be the wrong home precisely because nobody else would see it.</para>
+  /// be the wrong home precisely because nobody else would see it. It sits in
+  /// the vault folder but is never itself vaulted - only pack folders get
+  /// ignore lines.</para>
   ///
   /// <para><b>A record is a snapshot, and snapshots go stale.</b> Someone
   /// referencing a file after a scan makes the stored answer wrong in the
@@ -75,7 +77,7 @@ namespace CupkekGames.AssetVaults.Editor
     public string comment;
     public List<VaultUsageRecord> reports = new List<VaultUsageRecord>();
 
-    public const string DefaultRelativePath = "Vault/usage-reports.json";
+    public const string DefaultRelativePath = "Assets/Vault/usage-reports.json";
 
     private const string Explanation =
       "What the project references from each folder, recorded so nobody has to re-run a "

@@ -58,17 +58,27 @@ namespace CupkekGames.AssetVaults
     public List<VaultPack> packs = new List<VaultPack>();
 
     /// <summary>
-    /// Where vaulted packs live, beside <c>Assets</c> rather than inside it.
+    /// Where vaulted packs live: <b>inside</b> <c>Assets</c>, because the whole
+    /// point is that Unity keeps using them normally.
     ///
-    /// <para><c>Assets/ThirdParty</c> is for packs the project actually uses, and
-    /// those stay in git. This is for reference and source material that Unity
-    /// has no business importing - 771 files of skybox paintings a Python script
-    /// reads by path, for instance. Keeping it out of <c>Assets</c> means no
-    /// import cost, no GUIDs, and nothing that can silently break.</para>
+    /// <para>The vault is about <b>git size</b>, not import cost. A vaulted pack
+    /// is imported, referenced by materials and prefabs, and works exactly like
+    /// any other content - it simply is not in the repository. Git ignores it,
+    /// Drive holds it, and a machine that needs it downloads it once.</para>
+    ///
+    /// <para>A brief detour had this folder beside <c>Assets</c> instead. That
+    /// removed the import cost and, with it, the entire point: Unity could not
+    /// see the content, so nothing could reference it and every pack had to be
+    /// harvested before it could be used.</para>
     /// </summary>
-    public const string VaultRoot = "Vault";
+    public const string VaultRoot = "Assets/Vault";
 
-    public const string DefaultRelativePath = "Vault/vault.json";
+    public const string DefaultRelativePath = "Assets/Vault/vault.json";
+
+    /// <summary>The vault root as an absolute path, separators normalised.</summary>
+    public static string ResolveVaultRoot(string projectRoot)
+      => Path.Combine(Path.GetFullPath(projectRoot).TrimEnd(Path.DirectorySeparatorChar),
+        VaultRoot.Replace('/', Path.DirectorySeparatorChar));
 
     public static string ResolvePath(string projectRoot)
       => Path.Combine(projectRoot, DefaultRelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -91,7 +101,7 @@ namespace CupkekGames.AssetVaults
       }
 
       string root = Path.GetFullPath(projectRoot).TrimEnd(Path.DirectorySeparatorChar);
-      string vault = Path.Combine(root, VaultRoot) + Path.DirectorySeparatorChar;
+      string vault = ResolveVaultRoot(projectRoot) + Path.DirectorySeparatorChar;
       string full = Path.GetFullPath(Path.Combine(root,
         pack.path.Replace('/', Path.DirectorySeparatorChar)));
 
@@ -150,14 +160,17 @@ namespace CupkekGames.AssetVaults
     /// <para>The rules live here rather than in the window so every caller gets
     /// them: inside <see cref="VaultRoot"/>, and not already managed.</para>
     ///
-    /// <para>The vault root sits beside <c>Assets</c>, not inside it, and that
-    /// single decision removes most of what used to be dangerous here. Unity
-    /// never imports these folders, so nothing can reference them, no GUID can
-    /// break, and a stray <c>.cs</c> is inert text rather than a compile error -
-    /// which is why the old "no C# in a pack" refusal is gone rather than
-    /// relaxed. The vault holds reference and source material you are not
-    /// shipping; the moment you want a file in the game you copy it into
-    /// <c>Assets</c>, where it is tracked normally.</para>
+    /// <para>A vaulted pack stays a normal part of the project: Unity imports
+    /// it, materials and prefabs reference it, and it behaves like anything else
+    /// in <c>Assets</c>. What changes is only that git does not carry it. So the
+    /// archive must preserve every <c>.meta</c>, because those GUIDs are what
+    /// every reference into the pack resolves through - see
+    /// <c>ArchiveBuilder</c>.</para>
+    ///
+    /// <para>There is no refusal for packs containing C#. Downloading is a setup
+    /// step here (owner decision, 2026-08-29): a fresh clone is not expected to
+    /// compile until its vaulted packs arrive, which is what makes whole-folder
+    /// vaulting possible at all.</para>
     /// </summary>
     public VaultPack Add(string projectRoot, string absoluteFolder)
     {
@@ -167,13 +180,13 @@ namespace CupkekGames.AssetVaults
       }
 
       string root = Path.GetFullPath(projectRoot).TrimEnd(Path.DirectorySeparatorChar);
-      string vault = Path.Combine(root, VaultRoot) + Path.DirectorySeparatorChar;
+      string vault = ResolveVaultRoot(projectRoot) + Path.DirectorySeparatorChar;
       string full = Path.GetFullPath(absoluteFolder).TrimEnd(Path.DirectorySeparatorChar);
       if (!full.StartsWith(vault, StringComparison.OrdinalIgnoreCase))
       {
         throw new VaultException(
           $"Only folders inside {VaultRoot}/ can go in the vault. Move the folder there "
-          + "first: anything under Assets is part of the project and stays in git.");
+          + "first - Unity keeps using it from that location, it just stops being in git.");
       }
 
       string relative = full.Substring(root.Length + 1).Replace('\\', '/');

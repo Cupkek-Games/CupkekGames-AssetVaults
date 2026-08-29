@@ -138,9 +138,9 @@ namespace CupkekGames.AssetVaults.Editor
       if (!_showHelp) return;
 
       EditorGUILayout.HelpBox(
-        "The Vault folder next to Assets holds reference and source material: art packs "
-        + "kept for later, source paintings a tool reads, things the game does not ship. "
-        + "Unity never opens that folder, so none of it costs import time.\n\n"
+        "Assets/Vault holds packs that are part of the project but not part of the "
+        + "repository. Unity imports and uses them exactly like anything else; git simply "
+        + "does not carry them.\n\n"
         + "Those files are big, and putting them in Git makes the repository enormous and "
         + "slow to clone. So they are backed up to cloud storage instead, and this window "
         + "moves them in and out.\n\n"
@@ -148,8 +148,10 @@ namespace CupkekGames.AssetVaults.Editor
         + "whether the files are on THIS PC, and whether Drive has a backup. They are "
         + "separate things, and the buttons fix whichever is missing.\n\n"
         + "Nothing here ever deletes your work: 'Upload' copies out, 'Download' copies "
-        + "back. Anything under Assets is project content, stays in Git, and is not "
-        + "affected by any of this.",
+        + "back. Anything under Assets but outside Assets/Vault stays in Git and is not "
+        + "affected by any of this.\n\n"
+        + "A fresh clone will be missing these packs until someone downloads them, so "
+        + "expect missing art and, for packs with scripts, compile errors until then.",
         MessageType.Info);
       EditorGUILayout.Space(6);
     }
@@ -392,9 +394,9 @@ namespace CupkekGames.AssetVaults.Editor
         if (_candidates.Count == 0)
         {
           EditorGUILayout.LabelField(
-            $"Every folder in {VaultDiscovery.DefaultScanRoot}/ is already in the vault. To add "
-            + "another, move it there first - anything under Assets is project content and "
-            + "stays in Git.",
+            $"Every folder in {VaultDiscovery.DefaultScanRoot}/ is already in the vault. To "
+            + "add another, move it there first; Unity keeps using it from its new "
+            + "location, it just stops being in Git.",
             EditorStyles.wordWrappedMiniLabel);
         }
 
@@ -428,9 +430,9 @@ namespace CupkekGames.AssetVaults.Editor
         if (blocked > 0)
         {
           EditorGUILayout.LabelField(
-            $"{blocked} folder(s) here contain C#. Nothing in the vault compiles, so that is a "
-            + "warning rather than a problem: if the project actually uses one of those "
-            + "packages, it belongs under Assets instead of here.",
+            $"{blocked} folder(s) here contain C#. Vaulting those is allowed, but a fresh "
+            + "clone will not compile until it has downloaded them - the download is part "
+            + "of setting a machine up, not an optional extra.",
             EditorStyles.wordWrappedMiniLabel);
         }
 

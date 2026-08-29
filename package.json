@@ -1,14 +1,14 @@
 {
   "name": "com.cupkekgames.assetvaults",
   "displayName": "CupkekGames Asset Vaults",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": {
     "name": "CupkekGames",
     "url": "https://www.docs.cupkek.games"
   },
   "unity": "6000.5",
   "documentationUrl": "https://docs.cupkek.games/",
-  "description": "Keeps large reference and source material out of git. Packs live in a Vault folder beside Assets that Unity never imports, are archived per pack and backed up to cloud storage, and are restored with their .meta GUIDs intact. Storage-agnostic: backends register themselves, so this package installs alone.",
+  "description": "Keeps large packs out of git without taking them out of the project. Packs live under Assets/Vault, so Unity imports and uses them normally; git ignores them and cloud storage holds them, with a fresh clone downloading as a setup step. Restores .meta GUIDs intact. Storage-agnostic: backends register themselves, so this package installs alone.",
   "keywords": [
     "Asset Vault",
     "Large Files",

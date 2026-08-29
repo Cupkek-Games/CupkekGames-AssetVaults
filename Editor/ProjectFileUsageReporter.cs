@@ -138,13 +138,24 @@ namespace CupkekGames.AssetVaults.Editor
               continue;
             }
 
+            // A path that does not start at Assets/ is relative to the file it
+            // is written in: url("Icons/foo.png") inside
+            // .../Theme/Images/Icons.uss means .../Theme/Images/Icons/foo.png.
+            // Skipping these read every relatively-referenced asset as UNUSED -
+            // measured here as 40 fonts and 17 icons in one package's samples,
+            // and unused is the answer that gets files moved.
+            if (quoted.IndexOf('/') >= 0)
+            {
+              string resolved = ResolveRelative(relative, quoted);
+              if (resolved != null) Add(_byQuoted, resolved, relative);
+              continue;
+            }
+
             // Only a reference with NO path at all is ambiguous enough to need
-            // matching by filename. UI Toolkit normally writes the full path -
-            // url("project://database/Assets/.../blond.png?...guid=...") - and
-            // indexing its leaf too made every same-named file elsewhere look
-            // used. Measured: five files in a marketing folder reported as
-            // referenced because the real ones share their names.
-            if (quoted.IndexOf('/') >= 0) continue;
+            // matching by filename. Indexing the leaf of a full path made every
+            // same-named file elsewhere look used: five files in a marketing
+            // folder were reported as referenced because the real ones share
+            // their names.
             Add(_byQuoted, quoted, relative);
           }
         }
@@ -153,6 +164,32 @@ namespace CupkekGames.AssetVaults.Editor
       {
         EditorUtility.ClearProgressBar();
       }
+    }
+
+    /// <summary>
+    /// Resolve a relative reference against the folder of the file containing
+    /// it, collapsing "." and ".." the way a URL would.
+    /// </summary>
+    private static string ResolveRelative(string referrer, string reference)
+    {
+      int slash = referrer.LastIndexOf('/');
+      if (slash < 0) return null;
+
+      var parts = new List<string>(referrer.Substring(0, slash).Split('/'));
+      foreach (string segment in reference.Split('/'))
+      {
+        if (segment.Length == 0 || segment == ".") continue;
+        if (segment == "..")
+        {
+          if (parts.Count == 0) return null;
+          parts.RemoveAt(parts.Count - 1);
+          continue;
+        }
+
+        parts.Add(segment);
+      }
+
+      return parts.Count == 0 ? null : string.Join("/", parts);
     }
 
     private static void Add(Dictionary<string, List<string>> map, string key, string file)

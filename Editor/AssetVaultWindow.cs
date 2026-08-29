@@ -68,9 +68,40 @@ namespace CupkekGames.AssetVaults.Editor
       public PackState State;
       public int AssetsNow;
       public string Error;
+
+      /// <summary>One of <see cref="VaultCategory.All"/>, or empty.</summary>
+      public string Category;
+
+      /// <summary>
+      /// Typed and derived tags together, which is what a filter should match
+      /// and what a row should show. The two are kept apart only in the editor,
+      /// where one is yours to change and the other is not.
+      /// </summary>
+      public List<string> Tags;
     }
 
     [NonSerialized] private List<PackView> _views;
+
+    // Facet counts, built with the snapshot: a sidebar that recounted per
+    // repaint would be the CountAssets mistake again in a new place.
+    [NonSerialized] private List<Facet> _categoryFacets;
+    [NonSerialized] private List<Facet> _tagFacets;
+    [NonSerialized] private string _filter = string.Empty;
+
+    /// <summary>
+    /// A sidebar click, held as one string. One facet at a time on purpose:
+    /// intersecting facets needs a query language, and the text filter is
+    /// already the answer for anything more specific than "show me the audio".
+    /// </summary>
+    [NonSerialized] private string _facet;
+
+    private struct Facet
+    {
+      public string Key;
+      public string Label;
+      public int Count;
+    }
+
     [NonSerialized] private bool _connected;
     [NonSerialized] private string _problem;
     [NonSerialized] private UnityEngine.Object _settings;
@@ -90,6 +121,7 @@ namespace CupkekGames.AssetVaults.Editor
     private void OnEnable()
     {
       _showHelp = EditorPrefs.GetBool(HelpPrefKey, true);
+      _showSidebar = EditorPrefs.GetBool(SidebarPrefKey, true);
       Reload();
     }
 
@@ -126,6 +158,8 @@ namespace CupkekGames.AssetVaults.Editor
     private void BuildViews()
     {
       _views = new List<PackView>();
+      _categoryFacets = new List<Facet>();
+      _tagFacets = new List<Facet>();
       VaultBackendRegistration registration = VaultBackends.Active;
       _settings = registration?.FindSettingsAsset?.Invoke();
       _problem = "Backend unavailable.";
@@ -163,21 +197,131 @@ namespace CupkekGames.AssetVaults.Editor
         // Only needed to date a shared usage record, and only when there is one.
         VaultUsageRecord record = _findings?.Find(Relative(view.Dir));
         view.AssetsNow = record == null ? -1 : VaultUsageStore.CountAssets(view.Dir);
+
+        view.Category = pack.category ?? VaultCategory.Uncategorised;
+        view.Tags = new List<string>(pack.tags ?? new List<string>());
+        foreach (string derived in stats.Content)
+        {
+          if (!view.Tags.Contains(derived)) view.Tags.Add(derived);
+        }
+
         _views.Add(view);
       }
+
+      BuildFacets();
+    }
+
+    /// <summary>
+    /// Every category and tag in the vault with how many packs carry it.
+    ///
+    /// <para>Categories are listed even at zero, because an empty group is the
+    /// useful signal that nothing has been filed there yet. Tags are not: a tag
+    /// nobody uses is noise in a list whose whole job is to show what exists.</para>
+    /// </summary>
+    private void BuildFacets()
+    {
+      var categories = new Dictionary<string, int>();
+      var tags = new Dictionary<string, int>();
+
+      foreach (PackView view in _views)
+      {
+        if (view.Error != null) continue;
+
+        string category = VaultCategory.IsKnown(view.Category)
+          ? view.Category
+          : VaultCategory.Uncategorised;
+        categories.TryGetValue(category, out int seen);
+        categories[category] = seen + 1;
+
+        foreach (string tag in view.Tags)
+        {
+          tags.TryGetValue(tag, out int count);
+          tags[tag] = count + 1;
+        }
+      }
+
+      _categoryFacets = new List<Facet>();
+      foreach (string category in VaultCategory.All)
+      {
+        categories.TryGetValue(category, out int count);
+        _categoryFacets.Add(new Facet
+        {
+          Key = CategoryFacet + category,
+          Label = VaultCategory.Label(category),
+          Count = count,
+        });
+      }
+
+      if (categories.TryGetValue(VaultCategory.Uncategorised, out int loose) && loose > 0)
+      {
+        _categoryFacets.Add(new Facet
+        {
+          Key = CategoryFacet,
+          Label = "Uncategorised",
+          Count = loose,
+        });
+      }
+
+      _tagFacets = new List<Facet>();
+      foreach (KeyValuePair<string, int> tag in tags)
+      {
+        _tagFacets.Add(new Facet { Key = tag.Key, Label = tag.Key, Count = tag.Value });
+      }
+
+      // Commonest first, then alphabetical, so the shape of the vault reads off
+      // the top of the list rather than out of an arbitrary dictionary order.
+      _tagFacets.Sort((a, b) => a.Count != b.Count
+        ? b.Count.CompareTo(a.Count)
+        : string.CompareOrdinal(a.Label, b.Label));
+    }
+
+    /// <summary>
+    /// Category facets share a namespace with tag facets, so they are prefixed
+    /// rather than risking a tag called "audio" selecting the audio category.
+    /// </summary>
+    private const string CategoryFacet = "\u0000category:";
+
+    /// <summary>Does this pack survive the sidebar selection and the text box?</summary>
+    private bool Matches(PackView view)
+    {
+      if (_facet != null)
+      {
+        if (_facet.StartsWith(CategoryFacet, StringComparison.Ordinal))
+        {
+          string wanted = _facet.Substring(CategoryFacet.Length);
+          string actual = VaultCategory.IsKnown(view.Category)
+            ? view.Category
+            : VaultCategory.Uncategorised;
+          if (!string.Equals(wanted, actual, StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        else if (!view.Tags.Contains(_facet))
+        {
+          return false;
+        }
+      }
+
+      if (string.IsNullOrWhiteSpace(_filter)) return true;
+
+      string needle = _filter.Trim().ToLowerInvariant();
+      if (view.Name.ToLowerInvariant().Contains(needle)) return true;
+      if (view.Pack.id.ToLowerInvariant().Contains(needle)) return true;
+      if (VaultCategory.Label(view.Category).ToLowerInvariant().Contains(needle)) return true;
+      foreach (string tag in view.Tags)
+      {
+        if (tag.Contains(needle)) return true;
+      }
+
+      return false;
     }
 
     private void OnGUI()
     {
-      _scroll = EditorGUILayout.BeginScrollView(_scroll);
-
       DrawHelp();
 
       if (_error != null)
       {
         EditorGUILayout.HelpBox(_error, MessageType.Error);
         if (GUILayout.Button("Reload")) Reload();
-        EditorGUILayout.EndScrollView();
         return;
       }
 
@@ -185,11 +329,28 @@ namespace CupkekGames.AssetVaults.Editor
       {
         DrawSetup(_connected, _problem);
         DrawFailure();
-        EditorGUILayout.Space(10);
-        DrawPacks(_connected);
-      }
+        EditorGUILayout.Space(6);
+        DrawToolbar();
 
-      EditorGUILayout.EndScrollView();
+        if (_views == null) BuildViews();
+
+        // The sidebar and the list scroll independently. One scroll around
+        // both would push the facets off the top the moment the list is long,
+        // which is exactly when they are worth having.
+        using (new EditorGUILayout.HorizontalScope())
+        {
+          if (_showSidebar) DrawSidebar();
+
+          using (new EditorGUILayout.VerticalScope())
+          {
+            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+            DrawArbitraryUsage();
+            DrawDiscovery();
+            DrawPacks(_connected);
+            EditorGUILayout.EndScrollView();
+          }
+        }
+      }
 
       if (_busy != null)
       {
@@ -313,11 +474,27 @@ namespace CupkekGames.AssetVaults.Editor
       }
     }
 
-    private void DrawPacks(bool connected)
+    private void DrawToolbar()
     {
       using (new EditorGUILayout.HorizontalScope())
       {
-        EditorGUILayout.LabelField("Packs stored in the vault", EditorStyles.boldLabel);
+        if (GUILayout.Button(new GUIContent(_showSidebar ? "\u25C0 Facets" : "\u25B6 Facets",
+              "Show or hide the category and tag list."), EditorStyles.miniButton,
+              GUILayout.Width(70)))
+        {
+          _showSidebar = !_showSidebar;
+          EditorPrefs.SetBool(SidebarPrefKey, _showSidebar);
+        }
+
+        // Not a plain TextField: the search style brings the clear button with
+        // it, and a filter you cannot clear in one click gets left on.
+        string typed = EditorGUILayout.TextField(_filter, SearchStyle(),
+          GUILayout.MinWidth(120));
+        if (typed != _filter)
+        {
+          _filter = typed;
+          Repaint();
+        }
 
         using (new EditorGUI.DisabledScope(_manifest == null))
         {
@@ -345,10 +522,21 @@ namespace CupkekGames.AssetVaults.Editor
 
         if (GUILayout.Button("Refresh", GUILayout.Width(70))) Reload();
       }
+    }
 
-      DrawArbitraryUsage();
-      DrawDiscovery();
+    private static GUIStyle SearchStyle()
+    {
+      GUIStyle style = GUI.skin.FindStyle("ToolbarSearchTextField")
+        ?? GUI.skin.FindStyle("SearchTextField");
+      return style ?? EditorStyles.textField;
+    }
 
+    /// <summary>
+    /// The list itself: grouped by category, filtered by the sidebar and the
+    /// search box, one row per pack.
+    /// </summary>
+    private void DrawPacks(bool connected)
+    {
       if (_manifest == null || _manifest.packs.Count == 0)
       {
         EditorGUILayout.HelpBox(
@@ -363,8 +551,10 @@ namespace CupkekGames.AssetVaults.Editor
 
       // Collected, not removed inline: mutating the list mid-foreach throws.
       VaultPack drop = null;
+      int shown = 0;
+      string group = null;
 
-      foreach (PackView view in _views)
+      foreach (PackView view in Ordered())
       {
         if (view.Error != null)
         {
@@ -372,10 +562,32 @@ namespace CupkekGames.AssetVaults.Editor
           continue;
         }
 
+        if (!Matches(view)) continue;
+
+        string category = VaultCategory.IsKnown(view.Category)
+          ? view.Category
+          : VaultCategory.Uncategorised;
+        if (category != group)
+        {
+          group = category;
+          DrawGroupHeader(category);
+        }
+
+        shown++;
         if (DrawPackRow(view, connected))
         {
           drop = view.Pack;
         }
+      }
+
+      if (shown == 0)
+      {
+        EditorGUILayout.Space(4);
+        EditorGUILayout.LabelField(
+          _facet == null && string.IsNullOrWhiteSpace(_filter)
+            ? "Nothing to show."
+            : "No pack matches. Clear the filter to see the rest.",
+          EditorStyles.centeredGreyMiniLabel);
       }
 
       if (drop != null)
@@ -386,6 +598,104 @@ namespace CupkekGames.AssetVaults.Editor
         Reload();
       }
     }
+
+    /// <summary>
+    /// The snapshot in display order: by category, then by name inside it.
+    /// Sorted here rather than in <c>BuildViews</c> because the order is a
+    /// presentation choice and the snapshot is the data.
+    /// </summary>
+    private List<PackView> Ordered()
+    {
+      var ordered = new List<PackView>(_views);
+      ordered.Sort((a, b) =>
+      {
+        int byCategory = VaultCategory.Order(a.Category).CompareTo(
+          VaultCategory.Order(b.Category));
+        return byCategory != 0
+          ? byCategory
+          : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+      });
+
+      return ordered;
+    }
+
+    private static void DrawGroupHeader(string category)
+    {
+      EditorGUILayout.Space(4);
+      Rect row = EditorGUILayout.GetControlRect(false, 16f);
+      EditorGUI.LabelField(row, VaultCategory.Label(category).ToUpperInvariant(),
+        EditorStyles.miniBoldLabel);
+      EditorGUI.DrawRect(new Rect(row.x, row.yMax - 1f, row.width, 1f),
+        EditorGUIUtility.isProSkin
+          ? new Color(1f, 1f, 1f, 0.08f)
+          : new Color(0f, 0f, 0f, 0.10f));
+    }
+
+    /// <summary>
+    /// Every category and tag with a count, click to filter. The one part of
+    /// the window that answers "what is even in here" without scrolling.
+    /// </summary>
+    private void DrawSidebar()
+    {
+      using (new EditorGUILayout.VerticalScope(GUILayout.Width(SidebarWidth)))
+      {
+        _sidebarScroll = EditorGUILayout.BeginScrollView(_sidebarScroll);
+
+        EditorGUILayout.LabelField("CATEGORY", EditorStyles.miniBoldLabel);
+        foreach (Facet facet in _categoryFacets) DrawFacet(facet);
+
+        if (_tagFacets.Count > 0)
+        {
+          EditorGUILayout.Space(6);
+          EditorGUILayout.LabelField("TAGS", EditorStyles.miniBoldLabel);
+          foreach (Facet facet in _tagFacets) DrawFacet(facet);
+        }
+
+        EditorGUILayout.Space(6);
+        using (new EditorGUI.DisabledScope(_facet == null))
+        {
+          if (GUILayout.Button("Clear", EditorStyles.miniButton)) _facet = null;
+        }
+
+        EditorGUILayout.EndScrollView();
+      }
+    }
+
+    private void DrawFacet(Facet facet)
+    {
+      bool selected = _facet == facet.Key;
+      Rect row = EditorGUILayout.GetControlRect(false, 16f);
+
+      if (selected)
+      {
+        EditorGUI.DrawRect(row, EditorGUIUtility.isProSkin
+          ? new Color(1f, 1f, 1f, 0.10f)
+          : new Color(0f, 0f, 0f, 0.10f));
+      }
+
+      // A zero category is worth listing - it says nothing is filed there yet -
+      // but it should not look like something to click.
+      using (new EditorGUI.DisabledScope(facet.Count == 0))
+      {
+        EditorGUI.LabelField(new Rect(row.x + 2f, row.y, row.width - 34f, row.height),
+          facet.Label, selected ? EditorStyles.boldLabel : EditorStyles.label);
+        EditorGUI.LabelField(new Rect(row.xMax - 32f, row.y, 30f, row.height),
+          facet.Count.ToString(), RightMini());
+      }
+
+      if (facet.Count > 0 && Event.current.type == EventType.MouseDown
+          && Event.current.button == 0 && row.Contains(Event.current.mousePosition))
+      {
+        _facet = selected ? null : facet.Key;
+        Event.current.Use();
+        Repaint();
+      }
+    }
+
+    private const float SidebarWidth = 148f;
+    private const string SidebarPrefKey = "CupkekGames.AssetVault.ShowSidebar";
+    [NonSerialized] private bool _showSidebar;
+    [NonSerialized] private Vector2 _sidebarScroll;
 
     /// <summary>
     /// Three right-aligned numbers with no labels are a puzzle. One 14px strip
@@ -649,7 +959,9 @@ namespace CupkekGames.AssetVaults.Editor
       var fileRect = new Rect(right - 168f, row.y, 62f, row.height);
       var stateRect = new Rect(right - 102f, row.y, 102f, row.height);
 
-      EditorGUI.LabelField(nameRect, (open ? "\u25BC  " : "\u25B6  ") + view.Name);
+      string name = (open ? "\u25BC  " : "\u25B6  ") + view.Name;
+      EditorGUI.LabelField(nameRect, name);
+      DrawChips(nameRect, name, view.Tags);
       EditorGUI.LabelField(sizeRect,
         view.OnDisk ? VaultStatus.Describe(view.Stats.Bytes) : "-",
         RightMini());
@@ -657,7 +969,10 @@ namespace CupkekGames.AssetVaults.Editor
         view.OnDisk ? view.Stats.FileCount.ToString("N0") : "-", RightMini());
       EditorGUI.LabelField(stateRect, ShortState(view.State), RightMini());
 
-      if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition))
+      // Left button only: swallowing a right-click here would eat the context
+      // menu without ever putting one in its place.
+      if (Event.current.type == EventType.MouseDown && Event.current.button == 0
+          && row.Contains(Event.current.mousePosition))
       {
         _expanded = open ? null : view.Pack.id;
         Event.current.Use();
@@ -672,6 +987,44 @@ namespace CupkekGames.AssetVaults.Editor
     // style should have anyway. Not a field initialiser because EditorStyles is
     // not ready when the window is constructed.
     [NonSerialized] private GUIStyle _rightMini;
+
+    /// <summary>
+    /// Tags after the pack name, in whatever width the name did not use.
+    ///
+    /// <para>Dim on purpose: they are context for a row you are already reading,
+    /// not a column. When they do not fit they are cut to a count, because a
+    /// truncated tag name is a tag name that reads as a different tag.</para>
+    /// </summary>
+    private void DrawChips(Rect nameRect, string name, List<string> tags)
+    {
+      if (tags == null || tags.Count == 0) return;
+
+      float used = EditorStyles.label.CalcSize(new GUIContent(name)).x + 8f;
+      var rect = new Rect(nameRect.x + used, nameRect.y, nameRect.width - used, nameRect.height);
+      if (rect.width < 30f) return;
+
+      var text = new System.Text.StringBuilder();
+      int fitted = 0;
+      foreach (string tag in tags)
+      {
+        string candidate = text.Length == 0 ? tag : text + "  " + tag;
+        if (EditorStyles.miniLabel.CalcSize(new GUIContent(candidate)).x > rect.width - 26f)
+        {
+          break;
+        }
+
+        text.Clear();
+        text.Append(candidate);
+        fitted++;
+      }
+
+      if (fitted < tags.Count) text.Append("  +").Append(tags.Count - fitted);
+
+      Color previous = GUI.color;
+      GUI.color = new Color(previous.r, previous.g, previous.b, 0.55f);
+      EditorGUI.LabelField(rect, text.ToString(), EditorStyles.miniLabel);
+      GUI.color = previous;
+    }
 
     private GUIStyle RightMini()
     {
@@ -749,12 +1102,114 @@ namespace CupkekGames.AssetVaults.Editor
           }
         }
 
+        DrawTaxonomy(view);
         DrawUsage(pack.id, view.Dir, view.AssetsNow);
         drop = DrawStopManaging(pack);
       }
 
       EditorGUILayout.Space(2);
       return drop;
+    }
+
+    /// <summary>
+    /// Where a pack is filed and where it came from.
+    ///
+    /// <para>Only the answers a scan cannot reach are editable. What the pack is
+    /// made of is shown beside them and greyed, because it is counted from the
+    /// files themselves every reload - typing it would only be a chance to be
+    /// wrong about it later.</para>
+    /// </summary>
+    private void DrawTaxonomy(PackView view)
+    {
+      VaultPack pack = view.Pack;
+
+      using (new EditorGUILayout.HorizontalScope())
+      {
+        int current = VaultCategory.IsKnown(pack.category)
+          ? VaultCategory.Order(pack.category) + 1
+          : 0;
+        int picked = EditorGUILayout.Popup(
+          new GUIContent("Category", "What this pack primarily is. Groups the list."),
+          current, CategoryLabels(), GUILayout.Width(260));
+        if (picked != current)
+        {
+          pack.category = picked == 0
+            ? VaultCategory.Uncategorised
+            : VaultCategory.All[picked - 1];
+          CommitTaxonomy();
+        }
+      }
+
+      using (new EditorGUILayout.HorizontalScope())
+      {
+        EditorGUILayout.LabelField(new GUIContent("Where from",
+          "The part no scan can work out."), GUILayout.Width(146));
+
+        foreach (string tag in VaultTag.Provenance)
+        {
+          bool on = pack.tags.Contains(tag);
+          bool now = EditorGUILayout.ToggleLeft(tag, on, GUILayout.Width(94));
+          if (now == on) continue;
+
+          if (now) pack.tags.Add(tag);
+          else pack.tags.Remove(tag);
+          CommitTaxonomy();
+        }
+      }
+
+      using (new EditorGUILayout.HorizontalScope())
+      {
+        EditorGUILayout.LabelField(new GUIContent("Vendor",
+          "Free text, stored as a vendor: tag - the one place the vocabulary is "
+          + "open, because no fixed list holds every publisher's name."),
+          GUILayout.Width(146));
+
+        string vendor = string.Empty;
+        foreach (string tag in pack.tags)
+        {
+          if (VaultTag.IsVendor(tag)) vendor = tag.Substring(VaultTag.VendorPrefix.Length);
+        }
+
+        // Delayed: a keystroke is not a decision, and every commit writes the
+        // manifest and rebuilds the snapshot.
+        string typed = EditorGUILayout.DelayedTextField(vendor, GUILayout.Width(180));
+        if (typed != vendor)
+        {
+          pack.tags.RemoveAll(VaultTag.IsVendor);
+          string clean = VaultTag.Normalise(typed);
+          if (clean.Length > 0) pack.tags.Add(VaultTag.VendorPrefix + clean);
+          CommitTaxonomy();
+        }
+      }
+
+      using (new EditorGUI.DisabledScope(true))
+      {
+        EditorGUILayout.LabelField("Contains",
+          view.Stats.Content.Count == 0
+            ? view.OnDisk ? "nothing recognised" : "not on this PC, so nothing counted"
+            : string.Join("  ", view.Stats.Content),
+          EditorStyles.miniLabel);
+      }
+    }
+
+    private void CommitTaxonomy()
+    {
+      _manifest.Save(VaultComposition.ManifestPath);
+      // Not BuildViews(): the list is mid-draw. Dropping it rebuilds next frame.
+      _views = null;
+      Repaint();
+    }
+
+    private static string[] CategoryLabels()
+    {
+      var labels = new string[VaultCategory.All.Length + 1];
+      labels[0] = "Uncategorised";
+      for (int i = 0; i < VaultCategory.All.Length; i++)
+      {
+        labels[i + 1] = VaultCategory.Label(VaultCategory.All[i]);
+      }
+
+      return labels;
     }
 
     /// <summary>

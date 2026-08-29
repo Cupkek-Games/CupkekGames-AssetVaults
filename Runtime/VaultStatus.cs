@@ -33,11 +33,23 @@ namespace CupkekGames.AssetVaults
     public readonly long Bytes;
     public readonly string GuidHash;
 
-    public PackStats(int fileCount, long bytes, string guidHash)
+    /// <summary>
+    /// The derived content tags - models, textures, audio and so on.
+    ///
+    /// <para>They ride along on the stats because the census is free here and
+    /// expensive anywhere else: <see cref="VaultStatus.Inspect"/> already stats
+    /// every file in the pack, and a separate pass would mean walking a
+    /// multi-gigabyte folder twice to learn something the first walk saw.</para>
+    /// </summary>
+    public readonly IReadOnlyList<string> Content;
+
+    public PackStats(int fileCount, long bytes, string guidHash,
+      IReadOnlyList<string> content = null)
     {
       FileCount = fileCount;
       Bytes = bytes;
       GuidHash = guidHash;
+      Content = content ?? Array.Empty<string>();
     }
   }
 
@@ -57,14 +69,17 @@ namespace CupkekGames.AssetVaults
 
       int count = 0;
       long bytes = 0L;
+      var census = new Dictionary<string, int>();
+      int countable = 0;
       foreach (string file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
       {
         count++;
         bytes += new FileInfo(file).Length;
+        if (VaultContent.Count(file, census)) countable++;
       }
 
       string hash = includeGuidHash ? ComputeGuidDigest(dir) : string.Empty;
-      return new PackStats(count, bytes, hash);
+      return new PackStats(count, bytes, hash, VaultContent.Tags(census, countable));
     }
 
     /// <summary>

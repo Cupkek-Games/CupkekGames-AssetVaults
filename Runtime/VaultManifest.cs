@@ -28,6 +28,19 @@ namespace CupkekGames.AssetVaults
     public string source;
     public string note;
 
+    /// <summary>
+    /// What this pack primarily is: one of <see cref="VaultCategory.All"/>.
+    /// Groups the list, so it holds one answer and never two.
+    /// </summary>
+    public string category;
+
+    /// <summary>
+    /// Everything else true of the pack that a scan cannot find out - where it
+    /// came from, and from whom. What it is <i>made of</i> is derived instead,
+    /// in <see cref="VaultContent"/>, so it cannot go stale.
+    /// </summary>
+    public List<string> tags = new List<string>();
+
     // Recorded by a successful push; all four are checked on pull.
     public long bytes;
     public string sha256;
@@ -130,6 +143,15 @@ namespace CupkekGames.AssetVaults
       }
 
       manifest.packs ??= new List<VaultPack>();
+
+      // A manifest written before tags existed, or hand-edited, has nulls here.
+      // Every reader would otherwise need the same guard.
+      foreach (VaultPack pack in manifest.packs)
+      {
+        pack.tags ??= new List<string>();
+        pack.category ??= VaultCategory.Uncategorised;
+      }
+
       return manifest;
     }
 
@@ -219,6 +241,8 @@ namespace CupkekGames.AssetVaults
         archive = $"{id}-1.0.0.zip",
         source = string.Empty,
         note = string.Empty,
+        category = VaultCategory.Uncategorised,
+        tags = new List<string>(),
       };
 
       packs.Add(pack);

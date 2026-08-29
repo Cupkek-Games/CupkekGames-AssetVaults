@@ -24,11 +24,12 @@ Art packs bought for later, source paintings a tool reads, texture libraries you
 - `VaultStatus` — cheap inspection (counts, sizes) plus `ComputeGuidDigest`, a SHA256 over the pack's sorted `.meta` GUIDs. An archive checksum proves the bytes arrived; only this proves the `.meta` files came with them.
 - `ArchiveBuilder` — one zip per pack, carrying the folder's own sibling `.meta`. Extracts to staging and moves into place only on success, so a cancelled restore cannot leave a half-populated folder that later reads as healthy.
 - `VaultDiscovery` — folders in `Vault/` the manifest does not know about yet.
+- `VaultCategory` / `VaultTag` / `VaultContent` — the taxonomy. One category per pack from a closed list of eight, because its job is to group the list and a grouping field that holds two answers stops grouping. Tags carry provenance, also closed, with a `vendor:` prefix as the one open escape hatch. What a pack is *made of* is never typed: `VaultContent` counts extensions inside the walk `VaultStatus.Inspect` was already doing, so those tags cannot go stale.
 - `IVaultBackend` — four operations, and nothing above the interface may learn that a transfer involves OAuth, chunking or a subprocess.
 
 **Editor** (`CupkekGames.AssetVaults.Editor.asmdef`)
 
-- `AssetVaultWindow` — **Tools > CupkekGames > Asset Vault**. Per pack, two independent facts: is it on this PC, is it backed up. Buttons fix whichever is missing.
+- `AssetVaultWindow` — **Tools > CupkekGames > Asset Vault**. One line per pack, grouped by category, with a facet sidebar and a search box. A status dot merges the two facts the vault turns on: green when a pack is both on this PC and backed up, amber when it is one, grey when neither. Click a row for the sentence version and the buttons.
 - `VaultBackends` — where storage backends register themselves.
 - `VaultComposition` — project paths and the active backend.
 

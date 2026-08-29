@@ -47,13 +47,41 @@ namespace CupkekGames.AssetVaults.Editor
     [NonSerialized] private readonly Dictionary<string, UsageReport> _usage =
       new Dictionary<string, UsageReport>();
     [NonSerialized] private VaultUsageStore _findings;
+
+    /// <summary>
+    /// Everything about one pack that the window draws, worked out ONCE per
+    /// reload rather than per repaint.
+    ///
+    /// <para>This exists because the window was unusable. Drawing a row asked
+    /// the disk whether the folder existed four times, and the shared-usage row
+    /// called <see cref="VaultUsageStore.CountAssets"/>, which walks every file
+    /// in the pack. Across 19 packs holding thousands of files each that is tens
+    /// of thousands of file stats per frame, sixty times a second.</para>
+    /// </summary>
+    private struct PackView
+    {
+      public VaultPack Pack;
+      public string Name;
+      public string Dir;
+      public bool OnDisk;
+      public PackStats Stats;
+      public PackState State;
+      public int AssetsNow;
+      public string Error;
+    }
+
+    [NonSerialized] private List<PackView> _views;
+    [NonSerialized] private bool _connected;
+    [NonSerialized] private string _problem;
+    [NonSerialized] private UnityEngine.Object _settings;
+    [NonSerialized] private string _expanded;
     [NonSerialized] private readonly HashSet<string> _usageExpanded = new HashSet<string>();
     private readonly Dictionary<string, PackStats> _stats = new Dictionary<string, PackStats>();
     private readonly HashSet<string> _verified = new HashSet<string>();
     private Vector2 _scroll;
     private bool _showHelp;
 
-    [MenuItem("Tools/Asset Vault")]
+    [MenuItem("Tools/CupkekGames/Asset Vault")]
     public static void Open()
     {
       GetWindow<AssetVaultWindow>("Asset Vault").minSize = new Vector2(620, 420);
@@ -74,6 +102,7 @@ namespace CupkekGames.AssetVaults.Editor
       // The candidate list is a snapshot against a manifest that just changed.
       _candidates = null;
       _picked = null;
+      _views = null;
       // _usage deliberately survives: it describes folders on disk rather than
       // the manifest, and it can cost minutes to rebuild.
       try
@@ -81,11 +110,60 @@ namespace CupkekGames.AssetVaults.Editor
         _manifest = VaultManifest.Load(VaultComposition.ManifestPath);
         _backend = VaultComposition.ResolveBackend();
         _findings = VaultUsageStore.Load(VaultComposition.ProjectRoot);
+        BuildViews();
       }
       catch (Exception e)
       {
         _error = e.Message;
         _manifest = null;
+      }
+    }
+
+    /// <summary>
+    /// Ask the disk everything the window needs, once. Every field read while
+    /// drawing comes from here; nothing in OnGUI touches the filesystem.
+    /// </summary>
+    private void BuildViews()
+    {
+      _views = new List<PackView>();
+      VaultBackendRegistration registration = VaultBackends.Active;
+      _settings = registration?.FindSettingsAsset?.Invoke();
+      _problem = "Backend unavailable.";
+      _connected = _backend != null && _backend.IsConfigured(out _problem);
+
+      if (_manifest == null) return;
+
+      foreach (VaultPack pack in _manifest.packs)
+      {
+        var view = new PackView { Pack = pack, Name = PrettyName(pack) };
+        try
+        {
+          view.Dir = VaultManifest.ResolvePackDirectory(VaultComposition.ProjectRoot, pack);
+        }
+        catch (VaultException e)
+        {
+          view.Error = e.Message;
+          _views.Add(view);
+          continue;
+        }
+
+        view.OnDisk = Directory.Exists(view.Dir);
+
+        // A verified check hashed every .meta in the pack; re-inspecting would
+        // throw that away and quietly downgrade the pack's state.
+        if (!_stats.TryGetValue(pack.id, out PackStats stats))
+        {
+          stats = VaultStatus.Inspect(view.Dir, false);
+          _stats[pack.id] = stats;
+        }
+
+        view.Stats = stats;
+        view.State = VaultStatus.Evaluate(pack, view.Dir, _verified.Contains(pack.id), stats);
+
+        // Only needed to date a shared usage record, and only when there is one.
+        VaultUsageRecord record = _findings?.Find(Relative(view.Dir));
+        view.AssetsNow = record == null ? -1 : VaultUsageStore.CountAssets(view.Dir);
+        _views.Add(view);
       }
     }
 
@@ -103,17 +181,12 @@ namespace CupkekGames.AssetVaults.Editor
         return;
       }
 
-      // Asked once per repaint, not once per pack: it touches the disk. The
-      // seed matters - short-circuiting past IsConfigured leaves it unassigned.
-      string problem = "Backend unavailable.";
-      bool connected = _backend != null && _backend.IsConfigured(out problem);
-
       using (new EditorGUI.DisabledScope(_busy != null))
       {
-        DrawSetup(connected, problem);
+        DrawSetup(_connected, _problem);
         DrawFailure();
         EditorGUILayout.Space(10);
-        DrawPacks(connected);
+        DrawPacks(_connected);
       }
 
       EditorGUILayout.EndScrollView();
@@ -178,7 +251,9 @@ namespace CupkekGames.AssetVaults.Editor
         backend == null ? "Connection" : "Connection - " + backend.DisplayName,
         EditorStyles.boldLabel);
 
-      UnityEngine.Object settings = backend?.FindSettingsAsset?.Invoke();
+      // From the snapshot: FindSettingsAsset runs AssetDatabase.FindAssets, and
+      // once per repaint is once per frame.
+      UnityEngine.Object settings = _settings;
 
       string detail;
       if (backend == null)
@@ -280,32 +355,24 @@ namespace CupkekGames.AssetVaults.Editor
         return;
       }
 
+      if (_views == null) BuildViews();
+
+      DrawColumnHeader();
+
       // Collected, not removed inline: mutating the list mid-foreach throws.
       VaultPack drop = null;
 
-      foreach (VaultPack pack in _manifest.packs)
+      foreach (PackView view in _views)
       {
-        string dir;
-        try
+        if (view.Error != null)
         {
-          dir = VaultManifest.ResolvePackDirectory(VaultComposition.ProjectRoot, pack);
-        }
-        catch (VaultException e)
-        {
-          EditorGUILayout.HelpBox(e.Message, MessageType.Error);
+          EditorGUILayout.HelpBox(view.Error, MessageType.Error);
           continue;
         }
 
-        if (!_stats.TryGetValue(pack.id, out PackStats stats))
+        if (DrawPackRow(view, connected))
         {
-          stats = VaultStatus.Inspect(dir, false);
-          _stats[pack.id] = stats;
-        }
-
-        PackState state = VaultStatus.Evaluate(pack, dir, _verified.Contains(pack.id), stats);
-        if (DrawPackRow(pack, dir, stats, state, connected))
-        {
-          drop = pack;
+          drop = view.Pack;
         }
       }
 
@@ -318,7 +385,26 @@ namespace CupkekGames.AssetVaults.Editor
       }
     }
 
+    /// <summary>
+    /// Three right-aligned numbers with no labels are a puzzle. One 14px strip
+    /// solves it for the whole list.
+    /// </summary>
+    private static void DrawColumnHeader()
+    {
+      Rect row = EditorGUILayout.GetControlRect(false, 14f);
+      float right = row.x + row.width;
+      EditorGUI.LabelField(new Rect(row.x + 14f, row.y, 200f, row.height),
+        "pack", EditorStyles.miniLabel);
+      EditorGUI.LabelField(new Rect(right - 250f, row.y, 78f, row.height),
+        "size", RightMini());
+      EditorGUI.LabelField(new Rect(right - 168f, row.y, 62f, row.height),
+        "files", RightMini());
+      EditorGUI.LabelField(new Rect(right - 102f, row.y, 102f, row.height),
+        "state", RightMini());
+    }
+
     [NonSerialized] private string _probedFolder;
+    [NonSerialized] private int _probedAssets = -1;
 
     /// <summary>
     /// The decision usually happens BEFORE a folder is a pack: it is still in
@@ -333,6 +419,7 @@ namespace CupkekGames.AssetVaults.Editor
       if (string.IsNullOrEmpty(picked)) return;
 
       _probedFolder = picked;
+      _probedAssets = VaultUsageStore.CountAssets(picked);
       RunUsage(VaultUsageReporters.Active, ProbeKey, picked);
     }
 
@@ -352,11 +439,12 @@ namespace CupkekGames.AssetVaults.Editor
           {
             _usage.Remove(ProbeKey);
             _probedFolder = null;
+            _probedAssets = -1;
             return;
           }
         }
 
-        DrawUsage(ProbeKey, _probedFolder);
+        DrawUsage(ProbeKey, _probedFolder, _probedAssets);
       }
 
       EditorGUILayout.Space(6);
@@ -521,100 +609,147 @@ namespace CupkekGames.AssetVaults.Editor
       }
     }
 
-    /// <summary>Returns true when the row asked to be dropped from the manifest.</summary>
-    private bool DrawPackRow(VaultPack pack, string dir, PackStats stats, PackState state,
-      bool connected)
+    /// <summary>
+    /// One pack, one line. Nineteen packs of tall cards was a scrolling
+    /// exercise; the summary a reader wants is the name, the size and whether
+    /// it is safe, and everything else belongs behind a click.
+    ///
+    /// <para>Reads only from the <see cref="PackView"/> snapshot - no
+    /// filesystem calls happen while drawing.</para>
+    /// </summary>
+    /// <returns>True when the row asked to be dropped from the manifest.</returns>
+    private bool DrawPackRow(PackView view, bool connected)
+    {
+      bool open = _expanded == view.Pack.id;
+      Rect row = EditorGUILayout.GetControlRect(false, 18f);
+
+      if (open)
+      {
+        EditorGUI.DrawRect(new Rect(row.x - 2f, row.y - 1f, row.width + 4f, row.height + 2f),
+          EditorGUIUtility.isProSkin
+            ? new Color(1f, 1f, 1f, 0.06f)
+            : new Color(0f, 0f, 0f, 0.06f));
+      }
+
+      // A dot says the two things that matter at a glance: is it here, is it
+      // backed up. Green both, amber one, grey neither.
+      bool backed = view.Pack.HasBeenPushed;
+      Color previous = GUI.color;
+      GUI.color = view.OnDisk && backed ? new Color(0.45f, 0.85f, 0.45f)
+        : view.OnDisk || backed ? new Color(0.95f, 0.75f, 0.3f)
+        : new Color(0.6f, 0.6f, 0.6f);
+      EditorGUI.LabelField(new Rect(row.x, row.y, 14f, row.height), "\u25CF");
+      GUI.color = previous;
+
+      float right = row.x + row.width;
+      var nameRect = new Rect(row.x + 14f, row.y, row.width - 14f - 250f, row.height);
+      var sizeRect = new Rect(right - 250f, row.y, 78f, row.height);
+      var fileRect = new Rect(right - 168f, row.y, 62f, row.height);
+      var stateRect = new Rect(right - 102f, row.y, 102f, row.height);
+
+      EditorGUI.LabelField(nameRect, (open ? "\u25BC  " : "\u25B6  ") + view.Name);
+      EditorGUI.LabelField(sizeRect,
+        view.OnDisk ? VaultStatus.Describe(view.Stats.Bytes) : "-",
+        RightMini());
+      EditorGUI.LabelField(fileRect,
+        view.OnDisk ? view.Stats.FileCount.ToString("N0") : "-", RightMini());
+      EditorGUI.LabelField(stateRect, ShortState(view.State), RightMini());
+
+      if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition))
+      {
+        _expanded = open ? null : view.Pack.id;
+        Event.current.Use();
+        Repaint();
+      }
+
+      return open && DrawPackDetail(view, connected);
+    }
+
+    // Built once. EditorStyles is not available at field-initialiser time, so
+    // it cannot simply be a static readonly.
+    private static GUIStyle _rightMini;
+
+    private static GUIStyle RightMini()
+    {
+      return _rightMini ??= new GUIStyle(EditorStyles.miniLabel)
+      {
+        alignment = TextAnchor.MiddleRight
+      };
+    }
+
+    /// <summary>Four words, not a sentence - the sentence is in the detail.</summary>
+    private static string ShortState(PackState state)
+    {
+      switch (state)
+      {
+        case PackState.Missing: return "not on this PC";
+        case PackState.LocalOnly: return "no backup";
+        case PackState.Present: return "backed up";
+        case PackState.Modified: return "changed";
+        case PackState.Verified: return "verified";
+        case PackState.GuidDrift: return "ids differ";
+        default: return string.Empty;
+      }
+    }
+
+    /// <summary>The detail for the one expanded pack. Only ever one is open.</summary>
+    private bool DrawPackDetail(PackView view, bool connected)
     {
       bool drop = false;
+      VaultPack pack = view.Pack;
 
-      using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+      using (new EditorGUI.IndentLevelScope())
       {
+        EditorGUILayout.LabelField(Explain(view.State), EditorStyles.wordWrappedMiniLabel);
+
         using (new EditorGUILayout.HorizontalScope())
         {
-          EditorGUILayout.LabelField(PrettyName(pack), EditorStyles.boldLabel);
-          GUILayout.FlexibleSpace();
-          EditorGUILayout.LabelField(
-            stats.FileCount > 0
-              ? $"{VaultStatus.Describe(stats.Bytes)} · {stats.FileCount} files"
-              : "not on this PC",
-            EditorStyles.miniLabel, GUILayout.Width(170));
-        }
-
-        // Two independent facts, spelled out, because "where are my files" is the
-        // question this window exists to answer.
-        DrawFact("On this PC", Directory.Exists(dir),
-          Directory.Exists(dir) ? "yes, the folder is here" : "no, the folder is missing");
-        DrawFact("Backed up", pack.HasBeenPushed,
-          pack.HasBeenPushed
-            ? $"yes, version {pack.version}"
-            : "no, there is no copy in storage");
-
-        EditorGUILayout.LabelField(Explain(state), EditorStyles.wordWrappedMiniLabel);
-
-        EditorGUILayout.Space(2);
-        using (new EditorGUILayout.HorizontalScope())
-        {
-          bool onDisk = Directory.Exists(dir);
-
-          using (new EditorGUI.DisabledScope(!connected || !onDisk))
+          using (new EditorGUI.DisabledScope(!connected || !view.OnDisk))
           {
-            if (GUILayout.Button(
-              new GUIContent(pack.HasBeenPushed ? "Update backup" : "Upload",
-                "Copies this pack from your PC to storage. Your local files are not changed.")))
+            if (GUILayout.Button(new GUIContent(pack.HasBeenPushed ? "Update backup" : "Upload",
+              "Copies this pack from your PC to storage. Your local files are not changed.")))
             {
-              Upload(pack, dir);
+              Upload(pack, view.Dir);
             }
           }
 
-          // "Re-download" only makes sense when there is something to re-download;
-          // with no backup it read as an offer the disabled state then refused.
-          string label = onDisk && pack.HasBeenPushed ? "Re-download" : "Download to this PC";
-          string tip;
-          if (!pack.HasBeenPushed)
-          {
-            tip = "There is no copy in storage yet, so there is nothing to download.";
-          }
-          else if (onDisk)
-          {
-            tip = "Replaces the local folder with the backed-up copy.";
-          }
-          else
-          {
-            tip = "Copies this pack from storage back onto this PC.";
-          }
-
+          string label = view.OnDisk && pack.HasBeenPushed ? "Re-download" : "Download";
+          string tip = !pack.HasBeenPushed
+            ? "There is no copy in storage yet, so there is nothing to download."
+            : view.OnDisk
+              ? "Replaces the local folder with the backed-up copy."
+              : "Copies this pack from storage back onto this PC.";
           using (new EditorGUI.DisabledScope(!connected || !pack.HasBeenPushed))
           {
-            if (GUILayout.Button(new GUIContent(label, tip)))
-            {
-              Download(pack, dir);
-            }
+            if (GUILayout.Button(new GUIContent(label, tip))) Download(pack, view.Dir);
           }
 
-          using (new EditorGUI.DisabledScope(!onDisk))
+          using (new EditorGUI.DisabledScope(!view.OnDisk))
           {
-            if (GUILayout.Button(
-              new GUIContent("Check files",
-                "Reads every .meta file and compares them with the backup, to prove nothing "
-                + "was lost. Slow on big packs."), GUILayout.Width(90)))
+            if (GUILayout.Button(new GUIContent("Check files",
+              "Reads every .meta and compares it with the backup. Slow on big packs."),
+              GUILayout.Width(84)))
             {
-              _stats[pack.id] = VaultStatus.Inspect(dir, true);
+              _stats[pack.id] = VaultStatus.Inspect(view.Dir, true);
               _verified.Add(pack.id);
+              // Not BuildViews(): the list is mid-draw. Dropping it makes the
+              // next frame rebuild, which is the first frame that can show it.
+              _views = null;
             }
 
             if (GUILayout.Button(new GUIContent("Show", "Open the folder in Explorer."),
-                  GUILayout.Width(60)))
+              GUILayout.Width(50)))
             {
-              EditorUtility.RevealInFinder(dir);
+              EditorUtility.RevealInFinder(view.Dir);
             }
           }
         }
 
-        DrawUsage(pack.id, dir);
-
+        DrawUsage(pack.id, view.Dir, view.AssetsNow);
         drop = DrawStopManaging(pack);
       }
 
+      EditorGUILayout.Space(2);
       return drop;
     }
 
@@ -643,7 +778,12 @@ namespace CupkekGames.AssetVaults.Editor
     /// "What does the game actually use from this?" - the question that decides
     /// whether a folder can be vaulted at all.
     /// </summary>
-    private void DrawUsage(string key, string dir)
+    /// <param name="assetsNow">
+    /// How many assets the folder holds right now, counted once by the caller.
+    /// Counting it here meant walking the whole pack every frame. -1 when there
+    /// is no shared record to date, in which case nothing needs the number.
+    /// </param>
+    private void DrawUsage(string key, string dir, int assetsNow)
     {
       IVaultUsageReporter reporter = VaultUsageReporters.Active;
       bool onDisk = Directory.Exists(dir);
@@ -680,7 +820,7 @@ namespace CupkekGames.AssetVaults.Editor
 
       if (!_usage.TryGetValue(key, out UsageReport report))
       {
-        DrawSharedRecord(dir);
+        DrawSharedRecord(dir, assetsNow);
         return;
       }
 
@@ -741,13 +881,12 @@ namespace CupkekGames.AssetVaults.Editor
     /// staleness check, because a shared snapshot is exactly the thing that
     /// gets acted on long after it stopped being true.
     /// </summary>
-    private void DrawSharedRecord(string dir)
+    private void DrawSharedRecord(string dir, int assetsNow)
     {
       VaultUsageRecord record = _findings?.Find(Relative(dir));
-      if (record == null) return;
+      if (record == null || assetsNow < 0) return;
 
-      int now = VaultUsageStore.CountAssets(dir);
-      bool changed = now != record.totalAssets;
+      bool changed = assetsNow != record.totalAssets;
 
       EditorGUILayout.LabelField(
         $"Last checked {record.Age}: {record.usedFiles.Count} of {record.totalAssets} "
@@ -758,7 +897,7 @@ namespace CupkekGames.AssetVaults.Editor
       {
         EditorGUILayout.HelpBox(
           $"That answer is out of date: the folder held {record.totalAssets} assets when it "
-          + $"was checked and holds {now} now. Check it again before acting on it.",
+          + $"was checked and holds {assetsNow} now. Check it again before acting on it.",
           MessageType.Warning);
       }
       else
@@ -821,19 +960,6 @@ namespace CupkekGames.AssetVaults.Editor
       }
 
       Repaint();
-    }
-
-    private static void DrawFact(string label, bool ok, string detail)
-    {
-      using (new EditorGUILayout.HorizontalScope())
-      {
-        Color previous = GUI.color;
-        GUI.color = ok ? new Color(0.45f, 0.85f, 0.45f) : new Color(0.8f, 0.8f, 0.8f);
-        EditorGUILayout.LabelField(ok ? "OK" : "--", GUILayout.Width(24));
-        GUI.color = previous;
-        EditorGUILayout.LabelField(label, GUILayout.Width(140));
-        EditorGUILayout.LabelField(detail, EditorStyles.miniLabel);
-      }
     }
 
     private static string PrettyName(VaultPack pack)

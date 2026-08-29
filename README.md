@@ -28,7 +28,7 @@ Art packs bought for later, source paintings a tool reads, texture libraries you
 
 **Editor** (`CupkekGames.AssetVaults.Editor.asmdef`)
 
-- `AssetVaultWindow` — **Tools > Asset Vault**. Per pack, two independent facts: is it on this PC, is it backed up. Buttons fix whichever is missing.
+- `AssetVaultWindow` — **Tools > CupkekGames > Asset Vault**. Per pack, two independent facts: is it on this PC, is it backed up. Buttons fix whichever is missing.
 - `VaultBackends` — where storage backends register themselves.
 - `VaultComposition` — project paths and the active backend.
 

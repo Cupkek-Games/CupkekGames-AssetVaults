@@ -126,8 +126,15 @@ namespace CupkekGames.AssetVaults.Editor
           foreach (Match m in QuotedText.Matches(text))
           {
             string quoted = m.Groups[1].Value;
-            int query = quoted.IndexOf('?');
-            if (query >= 0) quoted = quoted.Substring(0, query);
+
+            // Strip BOTH of Unity's URL suffixes. "?fileID=...&guid=..." is the
+            // query; "#SpriteName" selects a sub-asset inside a sheet. Missing
+            // the fragment indexed the path with "#StarSheet_1" glued on, which
+            // matches no file - so a sprite sheet referenced five times read as
+            // unused and was moved, breaking all five. Found by checking after a
+            // split rather than trusting the scan.
+            int cut = quoted.IndexOfAny(new[] { '?', '#' });
+            if (cut >= 0) quoted = quoted.Substring(0, cut);
             quoted = quoted.Replace('\\', '/').TrimEnd('/');
             if (quoted.Length == 0) continue;
 

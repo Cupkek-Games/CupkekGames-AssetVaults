@@ -17,11 +17,16 @@ namespace CupkekGames.AssetVaults.Editor
     /// <summary>Who produced this, shown to the user so the answer has a source.</summary>
     public readonly string ReporterName;
 
-    public UsageReport(IReadOnlyList<string> usedFiles, int totalAssets, string reporterName)
+    /// <summary>How many project files were examined, for a sense of coverage.</summary>
+    public readonly int ProjectFilesRead;
+
+    public UsageReport(IReadOnlyList<string> usedFiles, int totalAssets, string reporterName,
+      int projectFilesRead = 0)
     {
       UsedFiles = usedFiles ?? Array.Empty<string>();
       TotalAssets = totalAssets;
       ReporterName = reporterName;
+      ProjectFilesRead = projectFilesRead;
     }
 
     public bool AnythingUsed => UsedFiles.Count > 0;

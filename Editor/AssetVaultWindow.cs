@@ -46,6 +46,7 @@ namespace CupkekGames.AssetVaults.Editor
     [NonSerialized] private HashSet<string> _picked;
     [NonSerialized] private readonly Dictionary<string, UsageReport> _usage =
       new Dictionary<string, UsageReport>();
+    [NonSerialized] private VaultUsageStore _findings;
     [NonSerialized] private readonly HashSet<string> _usageExpanded = new HashSet<string>();
     private readonly Dictionary<string, PackStats> _stats = new Dictionary<string, PackStats>();
     private readonly HashSet<string> _verified = new HashSet<string>();
@@ -79,6 +80,7 @@ namespace CupkekGames.AssetVaults.Editor
       {
         _manifest = VaultManifest.Load(VaultComposition.ManifestPath);
         _backend = VaultComposition.ResolveBackend();
+        _findings = VaultUsageStore.Load(VaultComposition.ProjectRoot);
       }
       catch (Exception e)
       {
@@ -674,7 +676,11 @@ namespace CupkekGames.AssetVaults.Editor
         }
       }
 
-      if (!_usage.TryGetValue(key, out UsageReport report)) return;
+      if (!_usage.TryGetValue(key, out UsageReport report))
+      {
+        DrawSharedRecord(dir);
+        return;
+      }
 
       int used = report.UsedFiles.Count;
       EditorGUILayout.LabelField(
@@ -719,12 +725,63 @@ namespace CupkekGames.AssetVaults.Editor
       }
     }
 
+    private string Relative(string dir)
+    {
+      string root = VaultComposition.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar);
+      string full = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
+      return full.Length > root.Length
+        ? full.Substring(root.Length + 1).Replace('\\', '/')
+        : full.Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// The answer somebody else already paid for. Shown with its age and a
+    /// staleness check, because a shared snapshot is exactly the thing that
+    /// gets acted on long after it stopped being true.
+    /// </summary>
+    private void DrawSharedRecord(string dir)
+    {
+      VaultUsageRecord record = _findings?.Find(Relative(dir));
+      if (record == null) return;
+
+      int now = VaultUsageStore.CountAssets(dir);
+      bool changed = now != record.totalAssets;
+
+      EditorGUILayout.LabelField(
+        $"Last checked {record.Age}: {record.usedFiles.Count} of {record.totalAssets} "
+        + $"assets referenced, via {record.reporter}.",
+        EditorStyles.wordWrappedMiniLabel);
+
+      if (changed)
+      {
+        EditorGUILayout.HelpBox(
+          $"That answer is out of date: the folder held {record.totalAssets} assets when it "
+          + $"was checked and holds {now} now. Check it again before acting on it.",
+          MessageType.Warning);
+      }
+      else
+      {
+        EditorGUILayout.LabelField(
+          "From " + VaultUsageStore.DefaultRelativePath + ", so it may have come from "
+          + "another machine. The folder is unchanged since, but a new reference to it "
+          + "would not show up here.",
+          EditorStyles.wordWrappedMiniLabel);
+      }
+    }
+
     private void RunUsage(IVaultUsageReporter reporter, string key, string dir)
     {
       _failure = null;
       try
       {
-        _usage[key] = reporter.Report(dir, CancellationToken.None);
+        UsageReport report = reporter.Report(dir, CancellationToken.None);
+        _usage[key] = report;
+
+        _findings ??= VaultUsageStore.Load(VaultComposition.ProjectRoot);
+        _findings.Record(Relative(dir), report, report.ProjectFilesRead);
+        _findings.Save(VaultComposition.ProjectRoot);
+        Debug.Log($"[AssetVault] recorded in {VaultUsageStore.DefaultRelativePath}; "
+                  + "commit it so nobody else has to run this scan.");
       }
       catch (OperationCanceledException)
       {

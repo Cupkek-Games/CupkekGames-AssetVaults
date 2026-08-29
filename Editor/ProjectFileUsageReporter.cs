@@ -262,7 +262,7 @@ namespace CupkekGames.AssetVaults.Editor
       }
 
       used.Sort(StringComparer.OrdinalIgnoreCase);
-      return new UsageReport(used, total, DisplayName);
+      return new UsageReport(used, total, DisplayName, index.FilesRead);
     }
 
     public void Invalidate() => ProjectReferenceIndex.Invalidate();

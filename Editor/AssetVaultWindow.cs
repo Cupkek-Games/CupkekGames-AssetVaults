@@ -44,6 +44,9 @@ namespace CupkekGames.AssetVaults.Editor
     [NonSerialized] private CancellationTokenSource _cts;
     [NonSerialized] private List<VaultCandidate> _candidates;
     [NonSerialized] private HashSet<string> _picked;
+    [NonSerialized] private readonly Dictionary<string, UsageReport> _usage =
+      new Dictionary<string, UsageReport>();
+    [NonSerialized] private readonly HashSet<string> _usageExpanded = new HashSet<string>();
     private readonly Dictionary<string, PackStats> _stats = new Dictionary<string, PackStats>();
     private readonly HashSet<string> _verified = new HashSet<string>();
     private Vector2 _scroll;
@@ -70,6 +73,8 @@ namespace CupkekGames.AssetVaults.Editor
       // The candidate list is a snapshot against a manifest that just changed.
       _candidates = null;
       _picked = null;
+      // _usage deliberately survives: it describes folders on disk rather than
+      // the manifest, and it can cost minutes to rebuild.
       try
       {
         _manifest = VaultManifest.Load(VaultComposition.ManifestPath);
@@ -246,9 +251,21 @@ namespace CupkekGames.AssetVaults.Editor
           }
         }
 
+        using (new EditorGUI.DisabledScope(VaultUsageReporters.Active == null))
+        {
+          if (GUILayout.Button(new GUIContent("Check a folder...",
+                "Ask what the project uses from ANY folder, before deciding whether to "
+                + "vault it. This is the question you want answered first."),
+                GUILayout.Width(120)))
+          {
+            CheckArbitraryFolder();
+          }
+        }
+
         if (GUILayout.Button("Refresh", GUILayout.Width(70))) Reload();
       }
 
+      DrawArbitraryUsage();
       DrawDiscovery();
 
       if (_manifest == null || _manifest.packs.Count == 0)
@@ -295,6 +312,50 @@ namespace CupkekGames.AssetVaults.Editor
         Debug.Log($"[AssetVault] no longer managing {drop.id}; nothing was deleted.");
         Reload();
       }
+    }
+
+    [NonSerialized] private string _probedFolder;
+
+    /// <summary>
+    /// The decision usually happens BEFORE a folder is a pack: it is still in
+    /// Assets and the question is whether it should be. So the report has to
+    /// work on anything, not only on things already in the manifest.
+    /// </summary>
+    private void CheckArbitraryFolder()
+    {
+      string picked = EditorUtility.OpenFolderPanel(
+        "Which folder should I check?",
+        Path.Combine(VaultComposition.ProjectRoot, "Assets"), string.Empty);
+      if (string.IsNullOrEmpty(picked)) return;
+
+      _probedFolder = picked;
+      RunUsage(VaultUsageReporters.Active, ProbeKey, picked);
+    }
+
+    private const string ProbeKey = "\u0000probe";
+
+    private void DrawArbitraryUsage()
+    {
+      if (_probedFolder == null || !_usage.ContainsKey(ProbeKey)) return;
+
+      using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+      {
+        using (new EditorGUILayout.HorizontalScope())
+        {
+          EditorGUILayout.LabelField(Path.GetFileName(_probedFolder.TrimEnd('/')),
+            EditorStyles.boldLabel);
+          if (GUILayout.Button("Close", GUILayout.Width(60)))
+          {
+            _usage.Remove(ProbeKey);
+            _probedFolder = null;
+            return;
+          }
+        }
+
+        DrawUsage(ProbeKey, _probedFolder);
+      }
+
+      EditorGUILayout.Space(6);
     }
 
     private void Rescan()
@@ -545,6 +606,8 @@ namespace CupkekGames.AssetVaults.Editor
           }
         }
 
+        DrawUsage(pack.id, dir);
+
         drop = DrawStopManaging(pack);
       }
 
@@ -570,6 +633,135 @@ namespace CupkekGames.AssetVaults.Editor
         "The vault will take it off the list.\n\nNothing is deleted: the folder stays "
         + "on this PC and any backup stays where it is. You can add it again later.",
         "Stop managing", "Keep it");
+    }
+
+    /// <summary>
+    /// "What does the game actually use from this?" - the question that decides
+    /// whether a folder can be vaulted at all.
+    /// </summary>
+    private void DrawUsage(string key, string dir)
+    {
+      IVaultUsageReporter reporter = VaultUsageReporters.Active;
+      bool onDisk = Directory.Exists(dir);
+
+      using (new EditorGUILayout.HorizontalScope())
+      {
+        using (new EditorGUI.DisabledScope(reporter == null || !onDisk))
+        {
+          if (GUILayout.Button(new GUIContent(
+                _usage.ContainsKey(key) ? "Check usage again" : "What does the game use?",
+                reporter == null
+                  ? "No usage reporter is installed."
+                  : "Searches every scene, prefab and asset for references into this "
+                    + "folder. Slow on a big pack - minutes, not seconds."),
+                GUILayout.Width(180)))
+          {
+            // Asking again means asking again: drop whatever the reporter cached.
+            if (_usage.ContainsKey(key)) reporter.Invalidate();
+            RunUsage(reporter, key, dir);
+          }
+        }
+
+        if (reporter == null)
+        {
+          EditorGUILayout.LabelField(
+            "No usage reporter installed, so the vault cannot tell you what is in use.",
+            EditorStyles.miniLabel);
+        }
+        else if (!_usage.ContainsKey(key))
+        {
+          EditorGUILayout.LabelField("via " + reporter.DisplayName, EditorStyles.miniLabel);
+        }
+      }
+
+      if (!_usage.TryGetValue(key, out UsageReport report)) return;
+
+      int used = report.UsedFiles.Count;
+      EditorGUILayout.LabelField(
+        used == 0
+          ? $"Nothing in this folder is referenced ({report.TotalAssets} assets checked)."
+          : $"{used} of {report.TotalAssets} assets are referenced by the project.",
+        EditorStyles.wordWrappedMiniLabel);
+
+      // The honest caveat, on the face of the result rather than in a doc: a
+      // reference built at runtime is invisible to any static search, so this
+      // narrows the work and never authorises a delete.
+      EditorGUILayout.LabelField(
+        "Files loaded by name at runtime cannot be detected, so treat this as a "
+        + "shortlist, not proof. Uploading and downloading once is what makes a "
+        + "mistake cost nothing.",
+        EditorStyles.wordWrappedMiniLabel);
+
+      if (used == 0) return;
+
+      bool open = _usageExpanded.Contains(key);
+      bool now = EditorGUILayout.Foldout(open, $"The {used} file(s) in use", true);
+      if (now != open)
+      {
+        if (now) _usageExpanded.Add(key);
+        else _usageExpanded.Remove(key);
+      }
+
+      if (now)
+      {
+        foreach (string f in report.UsedFiles)
+        {
+          EditorGUILayout.LabelField("    " + f, EditorStyles.miniLabel);
+        }
+      }
+
+      if (GUILayout.Button(new GUIContent(
+            $"Copy those {used} file(s) into Assets...",
+            "Copies them, with their .meta files so nothing that points at them breaks, "
+            + "into a folder you pick. The rest of the pack can then be vaulted.")))
+      {
+        Harvest(key, dir, report);
+      }
+    }
+
+    private void RunUsage(IVaultUsageReporter reporter, string key, string dir)
+    {
+      _failure = null;
+      try
+      {
+        _usage[key] = reporter.Report(dir, CancellationToken.None);
+      }
+      catch (OperationCanceledException)
+      {
+        Debug.Log("[AssetVault] usage search cancelled.");
+      }
+      catch (Exception e)
+      {
+        Debug.LogError("[AssetVault] " + e);
+        _failure = string.IsNullOrEmpty(e.Message) ? e.GetType().Name : e.Message;
+      }
+
+      Repaint();
+    }
+
+    private void Harvest(string key, string dir, UsageReport report)
+    {
+      string picked = EditorUtility.SaveFolderPanel(
+        "Where should the files still in use go?",
+        Path.Combine(VaultComposition.ProjectRoot, "Assets"), string.Empty);
+      if (string.IsNullOrEmpty(picked)) return;
+
+      try
+      {
+        IReadOnlyList<string> written = VaultHarvest.Copy(
+          VaultComposition.ProjectRoot, dir, report.UsedFiles, picked);
+        AssetDatabase.Refresh();
+        Debug.Log($"[AssetVault] copied {written.Count} file(s) out of {key}, GUIDs intact. "
+                  + "The rest of the folder can now be vaulted.");
+        _usage.Remove(key);
+      }
+      catch (Exception e)
+      {
+        Debug.LogError("[AssetVault] " + e);
+        _failure = e.Message;
+      }
+
+      Repaint();
     }
 
     private static void DrawFact(string label, bool ok, string detail)

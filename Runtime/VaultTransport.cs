@@ -8,7 +8,7 @@ namespace CupkekGames.AssetVaults
   /// <summary>
   /// Everything a storage backend must do, and nothing more.
   ///
-  /// <para>Four operations, deliberately. Nothing above this interface may learn
+  /// <para>Five operations, deliberately. Nothing above this interface may learn
   /// that a transfer involves OAuth, chunking, a subprocess or a particular
   /// vendor. The rule that keeps that honest: <b>no word from a backend's
   /// vocabulary (remote, chunk, oauth, drive, bucket) may appear in this
@@ -36,6 +36,14 @@ namespace CupkekGames.AssetVaults
 
     Task UploadAsync(string localFile, string remoteName,
       IProgress<TransferProgress> progress, CancellationToken ct);
+
+    /// <summary>
+    /// The address a person opens in a browser to see the vault where it lives,
+    /// or null when there is nothing to open yet (the vault is created by the
+    /// first upload) or the storage has no web view at all. May talk to the
+    /// storage, hence async and cancellable.
+    /// </summary>
+    Task<string> GetWebUrlAsync(CancellationToken ct);
   }
 
   /// <summary>One object in the vault, as the backend reports it.</summary>

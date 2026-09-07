@@ -457,10 +457,19 @@ namespace CupkekGames.AssetVaults.Editor
             }
           }
         }
-        else if (GUILayout.Button(ready ? "Settings" : "Set up...", GUILayout.Width(120)))
+        else
         {
-          Selection.activeObject = settings;
-          EditorGUIUtility.PingObject(settings);
+          if (ready && GUILayout.Button(new GUIContent("Open in " + backend.DisplayName,
+                "Open the vault where it lives, in the browser."), GUILayout.Width(150)))
+          {
+            OpenOnline();
+          }
+
+          if (GUILayout.Button(ready ? "Settings" : "Set up...", GUILayout.Width(120)))
+          {
+            Selection.activeObject = settings;
+            EditorGUIUtility.PingObject(settings);
+          }
         }
       }
 
@@ -1460,6 +1469,21 @@ namespace CupkekGames.AssetVaults.Editor
         _progress = p.HasTotal ? p.Fraction01 : 0f;
         if (!string.IsNullOrEmpty(p.Note)) _busy = p.Note;
         Repaint();
+      });
+    }
+
+    private void OpenOnline()
+    {
+      RunAsync("Finding the vault online", async ct =>
+      {
+        string url = await _backend.GetWebUrlAsync(ct);
+        if (url == null)
+        {
+          throw new VaultException(
+            "Nothing to open yet: the vault's online folder is created by the first upload.");
+        }
+
+        Application.OpenURL(url);
       });
     }
 

@@ -8,7 +8,7 @@ namespace CupkekGames.AssetVaults
   /// <summary>
   /// Everything a storage backend must do, and nothing more.
   ///
-  /// <para>Five operations, deliberately. Nothing above this interface may learn
+  /// <para>Six operations, deliberately. Nothing above this interface may learn
   /// that a transfer involves OAuth, chunking, a subprocess or a particular
   /// vendor. The rule that keeps that honest: <b>no word from a backend's
   /// vocabulary (remote, chunk, oauth, drive, bucket) may appear in this
@@ -36,6 +36,13 @@ namespace CupkekGames.AssetVaults
 
     Task UploadAsync(string localFile, string remoteName,
       IProgress<TransferProgress> progress, CancellationToken ct);
+
+    /// <summary>
+    /// Removes one object from the vault (a pack's older archive, once its new
+    /// version is up). A storage that keeps a recoverable copy for a while
+    /// should: the person may want the old version back.
+    /// </summary>
+    Task DeleteAsync(string remoteName, CancellationToken ct);
 
     /// <summary>
     /// The address a person opens in a browser to see the vault where it lives,

@@ -65,6 +65,10 @@ See `com.cupkekgames.assetvaults.googledrive` for a complete implementation.
 
 **Never remove a pack from git until a verified round trip has succeeded.** Between `git rm --cached` and a working download, the only copy of those bytes is one local disk. So: upload, download into a temp directory, check the size, sha256, file count and GUID digest all match, and only then add the `.gitignore` entry. Upload prints the exact ignore line and `git rm` command; it does not run them.
 
+## Versions and old archives
+
+A pack is stored as `<id>-<version>.zip`. When you upload a pack whose files changed since its last upload (another file count or other `.meta` GUIDs), the upload raises its patch version (1.0.1 to 1.0.2) and stores it under the new name; commit the manifest so the team downloads that one. Once the new archive is safely up, the pack's older archives are removed from storage (`VaultVersions`, `IVaultBackend.DeleteAsync`; Drive moves them to its trash, recoverable for 30 days). Without that, a teammate could still download an old version holding files the project has since moved out of the pack, and two copies would carry one GUID. A pack whose archive has a name of its own is overwritten in place instead.
+
 ## Dependencies
 
 None.

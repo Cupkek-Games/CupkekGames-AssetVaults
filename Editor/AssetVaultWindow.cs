@@ -1491,12 +1491,19 @@ namespace CupkekGames.AssetVaults.Editor
     {
       RunAsync($"Uploading {PrettyName(pack)}", async ct =>
       {
+        PackStats stats = VaultStatus.Inspect(dir, true);
+        // Changed files since the last upload make a new version: put the old
+        // name back if this upload does not finish.
+        string previousVersion = pack.version;
+        string previousArchive = pack.archive;
+        bool newVersion = VaultVersions.PrepareUpload(pack, stats.FileCount, stats.GuidHash);
         string zip = Path.Combine(Path.GetTempPath(), pack.archive);
+        bool uploaded = false;
         try
         {
-          PackStats stats = VaultStatus.Inspect(dir, true);
           ArchiveBuilder.Create(dir, zip, Reporter(), ct);
           await _backend.UploadAsync(zip, pack.archive, Reporter(), ct);
+          uploaded = true;
 
           // Record what was sent, so a later download can prove it arrived whole.
           pack.bytes = stats.Bytes;
@@ -1511,12 +1518,56 @@ namespace CupkekGames.AssetVaults.Editor
             $"[AssetVault] uploaded {pack.id} ({stats.FileCount} files). It is still in "
             + $"git too. To take it out of git once you trust the backup, add "
             + $"'/{pack.path}/' to .gitignore and run:  git rm -r --cached \"{pack.path}\"");
+          if (newVersion)
+          {
+            Debug.Log($"[AssetVault] {pack.id}: its files changed since {previousVersion}, so it went up "
+                      + $"as {pack.version}. Commit the vault manifest so the team downloads this one.");
+          }
+
+          await DeleteOlderArchivesAsync(pack, ct);
         }
         finally
         {
+          if (!uploaded)
+          {
+            pack.version = previousVersion;
+            pack.archive = previousArchive;
+          }
+
           if (File.Exists(zip)) File.Delete(zip);
         }
       });
+    }
+
+    // Once a new version is safely up, the pack's older archives go: a
+    // teammate who downloaded one would get files the project has since taken
+    // out of the pack, under the same IDs as the copies it now keeps. A failed
+    // delete leaves the old archive where it was and does not undo the upload.
+    private async Task DeleteOlderArchivesAsync(VaultPack pack, CancellationToken ct)
+    {
+      var stored = new List<string>();
+      try
+      {
+        foreach (RemoteObject o in await _backend.ListAsync(ct)) stored.Add(o.Name);
+      }
+      catch (VaultException e)
+      {
+        Debug.LogWarning($"[AssetVault] {pack.id}: could not list the vault to remove its older archives: {e.Message}");
+        return;
+      }
+
+      foreach (string old in VaultVersions.OlderArchives(pack, _manifest, stored))
+      {
+        try
+        {
+          await _backend.DeleteAsync(old, ct);
+          Debug.Log($"[AssetVault] {pack.id}: removed its older archive '{old}' from the vault.");
+        }
+        catch (VaultException e)
+        {
+          Debug.LogWarning($"[AssetVault] {pack.id}: could not remove its older archive '{old}': {e.Message}");
+        }
+      }
     }
 
     private void Download(VaultPack pack, string dir)
